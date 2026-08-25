@@ -69,6 +69,7 @@ CHIMERAX_BIN = load_chimerax_bin()
 
 # Widgets that need broader scope
 generated_combo = None
+latest_chimerax_run_dir = ""
 
 # Try to import matplotlib, but make it optional
 try:
@@ -375,6 +376,35 @@ def on_tree_click(event):
         pass
 
 
+def get_latest_chimerax_run_dir():
+    """Return the newest timestamped ChimeraX run folder, or the current directory as a fallback."""
+    global latest_chimerax_run_dir
+    cwd = os.getcwd()
+    if latest_chimerax_run_dir and os.path.isdir(latest_chimerax_run_dir):
+        return latest_chimerax_run_dir
+
+    candidates = []
+    for entry in os.listdir(cwd):
+        path = os.path.join(cwd, entry)
+        if entry.startswith("ChimeraX_") and os.path.isdir(path):
+            candidates.append(path)
+
+    if candidates:
+        latest_chimerax_run_dir = max(candidates, key=os.path.getmtime)
+        return latest_chimerax_run_dir
+
+    return cwd
+
+
+def create_chimerax_run_dir():
+    """Create and return a timestamped folder for one ChimeraX run."""
+    global latest_chimerax_run_dir
+    run_dir = os.path.join(os.getcwd(), f"ChimeraX_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    os.makedirs(run_dir, exist_ok=True)
+    latest_chimerax_run_dir = run_dir
+    return run_dir
+
+
 def run_chimerax():
     """Run ChimeraX commands per kept table row."""
     try:
@@ -421,6 +451,7 @@ def run_chimerax():
 
         auto_proj_targets = []
         auto_generated_pngs = []
+        run_dir = create_chimerax_run_dir()
 
         for idx, vals in enumerate(rows):
             try:
@@ -436,6 +467,10 @@ def run_chimerax():
             except Exception:
                 continue
 
+            pdb_out_path = os.path.join(run_dir, f"{mt_type}.pdb")
+            mrc_out_path = os.path.join(run_dir, f"{mt_type}.mrc")
+            png_out_path = os.path.join(run_dir, f"{mt_type}_proj.png")
+
             cmds = [
                 f"open \"{pdb_path}\"",
                 f"open \"{pdb_path}\"",
@@ -443,11 +478,11 @@ def run_chimerax():
                 f"sym #2 h,{r_su_A},{phi_su_deg},{n_su},{-1*n_su/2} coord #1 center 0,{delta_c_a},0 copies true",
                 f"sym #3 h,{r_pf_A},{phi_pf_deg},{N_val} coord #1 center 0,{delta_c_a},0 copies true",
                 f"move 0,1,0 {-1*delta_c_a} coord #4 models #4",
-                f"save \"{mt_type}.pdb\" model #4",
+                f"save \"{pdb_out_path}\" model #4",
                 f"volume new gridSpacing {p_size}",
                 f"volume cover #5 atomBox #4",
                 f"molmap #4 {lp_filter} onGrid #6",
-                f"save \"{mt_type}.mrc\" #7",
+                f"save \"{mrc_out_path}\" #7",
                 "close #1-3",
                 "close #5-6"
             ]
@@ -455,10 +490,7 @@ def run_chimerax():
             cmd_str = "; ".join(cmds)
             args = [bin_path, "--nogui", "--cmd", cmd_str]
             try:
-                # Remove prior outputs so only fresh projections appear
-                mrc_path = os.path.abspath(f"{mt_type}.mrc")
-                png_path = os.path.abspath(f"{mt_type}_proj.png")
-                for old_path in (mrc_path, png_path):
+                for old_path in (mrc_out_path, png_out_path):
                     try:
                         if os.path.exists(old_path):
                             os.remove(old_path)
@@ -470,7 +502,7 @@ def run_chimerax():
                 messagebox.showerror("ChimeraX error", f"Failed to launch ChimeraX for {mt_type}: {e}")
                 return
 
-            auto_proj_targets.append(mrc_path)
+            auto_proj_targets.append(mrc_out_path)
 
         info_msg = "ChimeraX launched headless (--nogui)."
         proj_success = 0
@@ -502,6 +534,11 @@ def run_chimerax():
             info_msg += "\nProjection issues:\n" + "\n".join(str(e) for e in proj_errors)
         if auto_generated_pngs and not display_ok and display_errors:
             info_msg += "\nDisplay issues:\n" + "\n".join(display_errors)
+
+        try:
+            refresh_generated_models()
+        except Exception:
+            pass
 
         messagebox.showinfo("ChimeraX", info_msg)
     except Exception as e:
@@ -657,14 +694,19 @@ def refresh_png_gallery(png_paths):
 
 
 def refresh_generated_models():
-    """Populate combobox with N_S.pdb files in current working directory."""
+    """Populate combobox with generated N_S.pdb files from the newest ChimeraX run folder."""
     global generated_combo
     if generated_combo is None:
         return
     try:
-        cwd = os.getcwd()
-        pdbs = [f for f in os.listdir(cwd) if f.lower().endswith(".pdb") and "_" in f]
-        pdbs.sort()
+        search_dir = get_latest_chimerax_run_dir()
+        pdbs = []
+        for root, _, files in os.walk(search_dir):
+            for name in files:
+                if name.lower().endswith(".pdb") and "_" in name:
+                    rel_path = os.path.relpath(os.path.join(root, name), os.getcwd())
+                    pdbs.append(rel_path)
+        pdbs = sorted({p for p in pdbs})
         generated_combo["values"] = pdbs
         if pdbs:
             if var_selected_generated_pdb.get() not in pdbs:
@@ -682,7 +724,7 @@ def open_selected_generated():
         messagebox.showwarning("No selection", "Select a generated N_S.pdb from the list or refresh it.")
         return
 
-    pdb_path = os.path.join(os.getcwd(), pdb_name)
+    pdb_path = pdb_name if os.path.isabs(pdb_name) else os.path.join(os.getcwd(), pdb_name)
     if not os.path.exists(pdb_path):
         messagebox.showerror("Missing file", f"PDB not found: {pdb_path}")
         return
@@ -747,6 +789,16 @@ def on_mode_change():
         pass
 
 
+def sync_chimerax_mode_from_dimer(*_args):
+    """If dimer mode is selected in the Parameters tab, match it in the ChimeraX tab."""
+    try:
+        if var_use_dimer.get():
+            var_mode.set("dimers")
+            on_mode_change()
+    except Exception:
+        pass
+
+
 def build_gui(root):
     root.title("TubulePy")
     root.geometry("1000x820+30+30")
@@ -804,6 +856,7 @@ def build_gui(root):
 
     global var_use_dimer
     var_use_dimer = tk.BooleanVar(value=False)
+    var_use_dimer.trace_add("write", sync_chimerax_mode_from_dimer)
     tk.Checkbutton(left_frm, text="Dimer (double a)", variable=var_use_dimer, bg="LightGrey").grid(
         row=7, column=0, columnspan=2, sticky="w", pady=(0, 8)
     )
@@ -930,17 +983,6 @@ def build_gui(root):
     )
     row_idx += 1
 
-    # Picker for generated N_S models in current working directory
-    tk.Label(chx_frm, text="Generated N_S model:").grid(row=row_idx, column=0, sticky="w", pady=2)
-    global generated_combo
-    generated_combo = ttk.Combobox(chx_frm, textvariable=var_selected_generated_pdb, width=40, state="readonly")
-    generated_combo.grid(row=row_idx, column=1, columnspan=2, sticky="we", pady=2)
-    tk.Button(chx_frm, text="Refresh", command=refresh_generated_models).grid(row=row_idx, column=3, padx=4)
-    tk.Button(chx_frm, text="Open in ChimeraX", command=open_selected_generated, bg="#d0e8d0").grid(
-        row=row_idx, column=4, padx=4
-    )
-    row_idx += 1
-
     controls_frm = tk.Frame(chx_frm)
     controls_frm.grid(row=row_idx, column=0, columnspan=7, sticky="ew", pady=4)
 
@@ -955,6 +997,17 @@ def build_gui(root):
     )
     for i in range(7):
         controls_frm.columnconfigure(i, weight=1)
+    row_idx += 1
+
+    # Picker for generated N_S models in current working directory
+    tk.Label(chx_frm, text="Generated N_S model:").grid(row=row_idx, column=0, sticky="w", pady=2)
+    global generated_combo
+    generated_combo = ttk.Combobox(chx_frm, textvariable=var_selected_generated_pdb, width=40, state="readonly")
+    generated_combo.grid(row=row_idx, column=1, columnspan=2, sticky="we", pady=2)
+    tk.Button(chx_frm, text="Refresh", command=refresh_generated_models).grid(row=row_idx, column=3, padx=4)
+    tk.Button(chx_frm, text="Open in ChimeraX", command=open_selected_generated, bg="#d0e8d0").grid(
+        row=row_idx, column=4, padx=4
+    )
     row_idx += 1
 
     gallery_container = tk.LabelFrame(chx_frm, text="PNG projections", padx=8, pady=8)
