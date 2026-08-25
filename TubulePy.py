@@ -18,6 +18,8 @@ import subprocess
 import time
 import json
 import sys
+import signal
+import threading
 from pathlib import Path
 
 # Store Tk image references to prevent garbage collection
@@ -69,7 +71,11 @@ CHIMERAX_BIN = load_chimerax_bin()
 
 # Widgets that need broader scope
 generated_combo = None
+chimerax_status_var = None
+chimerax_status_label = None
 latest_chimerax_run_dir = ""
+ACTIVE_CHIMERAX_PROCESSES = []
+CHIMERAX_STOP_REQUESTED = False
 
 # Try to import matplotlib, but make it optional
 try:
@@ -406,143 +412,161 @@ def create_chimerax_run_dir():
 
 
 def run_chimerax():
-    """Run ChimeraX commands per kept table row."""
-    try:
-        if table is None:
-            messagebox.showwarning("No data", "Please compute results first.")
-            return
-        clear_png_gallery()
-        rows = []
-        for item in table.get_children():
-            if str(table.item(item, "text")) not in ("☑", "✓", "True", "1"):
-                continue
-            rows.append(table.item(item)["values"])
-        if not rows:
-            messagebox.showwarning("No selection", "Please keep at least one row to send to ChimeraX.")
-            return
+    """Run ChimeraX commands per kept table row without blocking the GUI."""
 
-        pdb_path = var_pdb_path.get().strip()
-        if not pdb_path:
-            messagebox.showwarning("Missing PDB", "Please select a PDB model.")
-            return
-
-        bin_path = var_chimerax_bin.get().strip() or CHIMERAX_BIN
-        if os.path.isdir(bin_path):
-            bin_candidate = os.path.join(bin_path, "ChimeraX")
-            bin_path = bin_candidate if os.path.exists(bin_candidate) else bin_path
-        if not os.path.exists(bin_path):
-            messagebox.showerror("ChimeraX not found", f"ChimeraX binary not found at:\n{bin_path}")
-            return
-
-        save_chimerax_bin(bin_path)
-
+    def _worker():
+        global ACTIVE_CHIMERAX_PROCESSES, CHIMERAX_STOP_REQUESTED
         try:
-            p_size = float(var_p_size.get())
-        except Exception:
-            p_size = 4.0
-        try:
-            lp_filter = float(var_lp_filter.get())
-        except Exception:
-            lp_filter = 15.0
-        try:
-            n_su = int(float(var_n_su.get()))
-        except Exception:
-            n_su = 10 if var_mode.get() == "monomers" else 5
-
-        auto_proj_targets = []
-        auto_generated_pngs = []
-        run_dir = create_chimerax_run_dir()
-
-        for idx, vals in enumerate(rows):
-            try:
-                mt_type = str(vals[0])
-                N_val = float(vals[1])
-                S_val = float(vals[2])
-                theta_deg = float(vals[3])
-                r_su_A = float(vals[4])
-                phi_su_deg = float(vals[5])
-                delta_c_a = float(vals[6])
-                r_pf_A = float(vals[7])
-                phi_pf_deg = float(vals[8])
-            except Exception:
-                continue
-
-            pdb_out_path = os.path.join(run_dir, f"{mt_type}.pdb")
-            mrc_out_path = os.path.join(run_dir, f"{mt_type}.mrc")
-            png_out_path = os.path.join(run_dir, f"{mt_type}_proj.png")
-
-            cmds = [
-                f"open \"{pdb_path}\"",
-                f"open \"{pdb_path}\"",
-                f"turn 0,1,0 {theta_deg} models #2 coordinateSystem #1",
-                f"sym #2 h,{r_su_A},{phi_su_deg},{n_su},{-1*n_su/2} coord #1 center 0,{delta_c_a},0 copies true",
-                f"sym #3 h,{r_pf_A},{phi_pf_deg},{N_val} coord #1 center 0,{delta_c_a},0 copies true",
-                f"move 0,1,0 {-1*delta_c_a} coord #4 models #4",
-                f"save \"{pdb_out_path}\" model #4",
-                f"volume new gridSpacing {p_size}",
-                f"volume cover #5 atomBox #4",
-                f"molmap #4 {lp_filter} onGrid #6",
-                f"save \"{mrc_out_path}\" #7",
-                "close #1-3",
-                "close #5-6"
-            ]
-
-            cmd_str = "; ".join(cmds)
-            args = [bin_path, "--nogui", "--cmd", cmd_str]
-            try:
-                for old_path in (mrc_out_path, png_out_path):
-                    try:
-                        if os.path.exists(old_path):
-                            os.remove(old_path)
-                    except Exception:
-                        pass
-
-                subprocess.Popen(args)
-            except Exception as e:
-                messagebox.showerror("ChimeraX error", f"Failed to launch ChimeraX for {mt_type}: {e}")
+            set_chimerax_status("Process running...", "darkorange")
+            if table is None:
+                _show_ui_message("warning", "No data", "Please compute results first.")
+                set_chimerax_status("", "darkorange")
+                return
+            clear_png_gallery()
+            CHIMERAX_STOP_REQUESTED = False
+            ACTIVE_CHIMERAX_PROCESSES.clear()
+            rows = []
+            for item in table.get_children():
+                if str(table.item(item, "text")) not in ("☑", "✓", "True", "1"):
+                    continue
+                rows.append(table.item(item)["values"])
+            if not rows:
+                _show_ui_message("warning", "No selection", "Please keep at least one row to send to ChimeraX.")
+                set_chimerax_status("", "darkorange")
                 return
 
-            auto_proj_targets.append(mrc_out_path)
+            pdb_path = var_pdb_path.get().strip()
+            if not pdb_path:
+                _show_ui_message("warning", "Missing PDB", "Please select a PDB model.")
+                set_chimerax_status("", "darkorange")
+                return
 
-        info_msg = "ChimeraX launched headless (--nogui)."
-        proj_success = 0
-        proj_errors = []
-        display_ok = True
-        display_errors = []
-        if auto_proj_targets:
-            wait_deadline = time.time() + 300.0
-            pending = set(auto_proj_targets)
-            while pending and time.time() < wait_deadline:
-                ready = [p for p in pending if os.path.exists(p) and os.path.getsize(p) > 0]
-                for p in ready:
-                    pending.remove(p)
+            bin_path = var_chimerax_bin.get().strip() or CHIMERAX_BIN
+            if os.path.isdir(bin_path):
+                bin_candidate = os.path.join(bin_path, "ChimeraX")
+                bin_path = bin_candidate if os.path.exists(bin_candidate) else bin_path
+            if not os.path.exists(bin_path):
+                _show_ui_message("error", "ChimeraX not found", f"ChimeraX binary not found at:\n{bin_path}")
+                set_chimerax_status("", "darkorange")
+                return
+
+            save_chimerax_bin(bin_path)
+
+            try:
+                p_size = float(var_p_size.get())
+            except Exception:
+                p_size = 4.0
+            try:
+                lp_filter = float(var_lp_filter.get())
+            except Exception:
+                lp_filter = 15.0
+            try:
+                n_su = int(float(var_n_su.get()))
+            except Exception:
+                n_su = 10 if var_mode.get() == "monomers" else 5
+
+            auto_proj_targets = []
+            auto_generated_pngs = []
+            run_dir = create_chimerax_run_dir()
+
+            for idx, vals in enumerate(rows):
+                try:
+                    mt_type = str(vals[0])
+                    N_val = float(vals[1])
+                    S_val = float(vals[2])
+                    theta_deg = float(vals[3])
+                    r_su_A = float(vals[4])
+                    phi_su_deg = float(vals[5])
+                    delta_c_a = float(vals[6])
+                    r_pf_A = float(vals[7])
+                    phi_pf_deg = float(vals[8])
+                except Exception:
+                    continue
+
+                pdb_out_path = os.path.join(run_dir, f"{mt_type}.pdb")
+                mrc_out_path = os.path.join(run_dir, f"{mt_type}.mrc")
+                png_out_path = os.path.join(run_dir, f"{mt_type}_proj.png")
+
+                cmds = [
+                    f"open \"{pdb_path}\"",
+                    f"open \"{pdb_path}\"",
+                    f"turn 0,1,0 {theta_deg} models #2 coordinateSystem #1",
+                    f"sym #2 h,{r_su_A},{phi_su_deg},{n_su},{-1*n_su/2} coord #1 center 0,{delta_c_a},0 copies true",
+                    f"sym #3 h,{r_pf_A},{phi_pf_deg},{N_val} coord #1 center 0,{delta_c_a},0 copies true",
+                    f"move 0,1,0 {-1*delta_c_a} coord #4 models #4",
+                    f"save \"{pdb_out_path}\" model #4",
+                    f"volume new gridSpacing {p_size}",
+                    f"volume cover #5 atomBox #4",
+                    f"molmap #4 {lp_filter} onGrid #6",
+                    f"save \"{mrc_out_path}\" #7",
+                    "close #1-3",
+                    "close #5-6"
+                ]
+
+                cmd_str = "; ".join(cmds)
+                args = [bin_path, "--nogui", "--cmd", cmd_str]
+                try:
+                    for old_path in (mrc_out_path, png_out_path):
+                        try:
+                            if os.path.exists(old_path):
+                                os.remove(old_path)
+                        except Exception:
+                            pass
+
+                    proc = subprocess.Popen(args, start_new_session=True)
+                    ACTIVE_CHIMERAX_PROCESSES.append(proc)
+                except Exception as e:
+                    _show_ui_message("error", "ChimeraX error", f"Failed to launch ChimeraX for {mt_type}: {e}")
+                    return
+
+                auto_proj_targets.append(mrc_out_path)
+
+            info_msg = "ChimeraX launched headless (--nogui)."
+            proj_success = 0
+            proj_errors = []
+            display_ok = True
+            display_errors = []
+            if auto_proj_targets:
+                wait_deadline = time.time() + 300.0
+                pending = set(auto_proj_targets)
+                while pending and time.time() < wait_deadline and not CHIMERAX_STOP_REQUESTED:
+                    ready = [p for p in pending if os.path.exists(p) and os.path.getsize(p) > 0]
+                    for p in ready:
+                        pending.remove(p)
+                    if pending:
+                        time.sleep(0.5)
+                if CHIMERAX_STOP_REQUESTED:
+                    proj_errors.append("User interrupted the ChimeraX run.")
                 if pending:
-                    time.sleep(0.5)
-            if pending:
-                proj_errors.extend([f"{os.path.basename(p)} not found or empty after wait" for p in sorted(pending)])
-            existing = [p for p in auto_proj_targets if os.path.exists(p) and os.path.getsize(p) > 0]
-            if existing:
-                proj_success, proj_errors_extra, auto_generated_pngs = project_mrc_files(existing, show_message=False)
-                if proj_errors_extra:
-                    proj_errors.extend(proj_errors_extra)
-                if auto_generated_pngs:
-                    display_ok, display_errors = refresh_png_gallery(auto_generated_pngs)
+                    proj_errors.extend([f"{os.path.basename(p)} not found or empty after wait" for p in sorted(pending)])
+                existing = [p for p in auto_proj_targets if os.path.exists(p) and os.path.getsize(p) > 0]
+                if existing:
+                    proj_success, proj_errors_extra, auto_generated_pngs = project_mrc_files(existing, show_message=False)
+                    if proj_errors_extra:
+                        proj_errors.extend(proj_errors_extra)
+                    if auto_generated_pngs:
+                        display_ok, display_errors = refresh_png_gallery(auto_generated_pngs)
 
-        if proj_success:
-            info_msg += f"\nAuto-projected {proj_success} .mrc file(s) to PNG."
-        if proj_errors:
-            info_msg += "\nProjection issues:\n" + "\n".join(str(e) for e in proj_errors)
-        if auto_generated_pngs and not display_ok and display_errors:
-            info_msg += "\nDisplay issues:\n" + "\n".join(display_errors)
+            if proj_success:
+                info_msg += f"\nAuto-projected {proj_success} .mrc file(s) to PNG."
+            if proj_errors:
+                info_msg += "\nProjection issues:\n" + "\n".join(str(e) for e in proj_errors)
+            if auto_generated_pngs and not display_ok and display_errors:
+                info_msg += "\nDisplay issues:\n" + "\n".join(display_errors)
 
-        try:
-            refresh_generated_models()
-        except Exception:
-            pass
+            ACTIVE_CHIMERAX_PROCESSES.clear()
+            try:
+                refresh_generated_models()
+            except Exception:
+                pass
 
-        messagebox.showinfo("ChimeraX", info_msg)
-    except Exception as e:
-        messagebox.showerror("ChimeraX error", str(e))
+            set_chimerax_status("", "darkorange")
+            _show_ui_message("info", "ChimeraX", info_msg)
+        except Exception as e:
+            set_chimerax_status("", "darkorange")
+            _show_ui_message("error", "ChimeraX error", str(e))
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 def project_mrc_files(paths, show_message=True):
@@ -790,13 +814,81 @@ def on_mode_change():
 
 
 def sync_chimerax_mode_from_dimer(*_args):
-    """If dimer mode is selected in the Parameters tab, match it in the ChimeraX tab."""
+    """Keep the ChimeraX mode aligned with the Parameters tab, while allowing manual override."""
     try:
         if var_use_dimer.get():
             var_mode.set("dimers")
-            on_mode_change()
+        else:
+            var_mode.set("monomers")
+        on_mode_change()
     except Exception:
         pass
+
+
+def _show_ui_message(kind, title, message):
+    """Display a message from the GUI thread, even when called from a worker thread."""
+    def _emit():
+        if kind == "info":
+            messagebox.showinfo(title, message)
+        elif kind == "warning":
+            messagebox.showwarning(title, message)
+        else:
+            messagebox.showerror(title, message)
+
+    if "root" in globals() and root is not None:
+        try:
+            root.after(0, _emit)
+            return
+        except Exception:
+            pass
+    _emit()
+
+
+def set_chimerax_status(text, fg="darkorange"):
+    """Update the visible status message on the ChimeraX tab."""
+    global chimerax_status_var, chimerax_status_label
+    if chimerax_status_var is not None:
+        try:
+            chimerax_status_var.set(text)
+        except Exception:
+            pass
+    if chimerax_status_label is not None:
+        try:
+            chimerax_status_label.config(fg=fg)
+        except Exception:
+            pass
+
+
+def kill_chimerax_processes():
+    """Terminate any active ChimeraX processes launched by the GUI."""
+    global ACTIVE_CHIMERAX_PROCESSES, CHIMERAX_STOP_REQUESTED
+    CHIMERAX_STOP_REQUESTED = True
+    set_chimerax_status("Process stopped.", "darkred")
+    for proc in list(ACTIVE_CHIMERAX_PROCESSES):
+        try:
+            if proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except Exception:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    ACTIVE_CHIMERAX_PROCESSES.clear()
+    _show_ui_message("info", "ChimeraX", "ChimeraX process terminated.")
+    set_chimerax_status("", "darkorange")
 
 
 def build_gui(root):
@@ -967,6 +1059,20 @@ def build_gui(root):
         row=row_idx, column=1, columnspan=2, sticky="we", pady=2
     )
     tk.Button(chx_frm, text="Browse", command=browse_chimerax_bin).grid(row=row_idx, column=3, padx=4)
+    tk.Button(chx_frm, text="Kill process", command=kill_chimerax_processes, bg="#f7d7d7").grid(
+        row=row_idx, column=4, sticky="e", padx=(2, 0)
+    )
+    global chimerax_status_var, chimerax_status_label
+    chimerax_status_var = tk.StringVar(value="")
+    chimerax_status_label = tk.Label(
+        chx_frm,
+        textvariable=chimerax_status_var,
+        fg="darkorange",
+        font=(None, 10, "bold"),
+        anchor="w",
+        justify="left",
+    )
+    chimerax_status_label.grid(row=row_idx, column=5, sticky="w", padx=(4, 0))
     row_idx += 1
 
     tk.Label(chx_frm, text="PDB model:").grid(row=row_idx, column=0, sticky="w", pady=2)
