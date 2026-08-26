@@ -23,6 +23,7 @@ Download TubulePy.py and place it in a dedicated folder. Download the three PDB 
 •	Once in your environment, type at the terminal: python TubulePy.py
 
 # TubulePy interface
+<img width="4241" height="1999" alt="Interface" src="https://github.com/user-attachments/assets/a23562b8-a14e-4941-a702-ed52af59dde4" />
 
 
 # History
