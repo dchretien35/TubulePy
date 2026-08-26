@@ -15,7 +15,14 @@ Download TubulePy.py and place it in a dedicated folder. Download the three PDB 
 •	External app: Latest version of UCSF ChimeraX (https://www.cgl.ucsf.edu/chimerax/) installed and its ChimeraX binary accessible (path is user-selectable in the app).
 
 •	Packages for full feature set (projections and gallery): numpy, mrcfile, Pillow.
+
 •	Optional packages: matplotlib (needed for the N ~  plot and as a fallback saver if Pillow is missing).
+
+•	One-line install (inside your desired env): run 'pip install numpy mrcfile Pillow matplotlib’ in the terminal before running TubulePy.
+
+•	Once in your environment, type at the terminal: python TubulePy.py
+
+# TubulePy interface
 
 
 # History
