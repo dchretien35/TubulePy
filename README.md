@@ -27,6 +27,8 @@ Download TubulePy.py and place it in a dedicated folder. Download the three PDB 
 
 TubulePy is composed of two tabs (Parameters and ChimeraX). The first tab allows calculation of protofilament skew angles and helical parameters of microtubule N_S configurations. The second tab allows building of PDB-based microtubule models; MRC derived 3D models, as well as projected densities using ChimeraX.
 
+Instructions are provided in the document TubulePy.pdf.
+
 # History
 TubulePy is based on the Lattice Accommodation Model (LAM) that allows prediction of microtubule protofilament skew angles for any N_S configuration (Chrétien and Fuller, 2020). Microtubules with fractional helical-starts mimicking unique C- or D-type lattices are computed (Guyomar et al., in preparation).
 
