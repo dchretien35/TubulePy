@@ -16,7 +16,7 @@ Download TubulePy.py and place it in a dedicated folder. Download the three PDB 
 
 •	Packages for full feature set (projections and gallery): numpy, mrcfile, Pillow.
 
-•	Optional packages: matplotlib (needed for the N ~  plot and as a fallback saver if Pillow is missing).
+•	Optional packages: matplotlib (needed for the N~Theta plot and as a fallback saver if Pillow is missing).
 
 •	One-line install (inside your desired env): run 'pip install numpy mrcfile Pillow matplotlib’ in the terminal before running TubulePy.
 
