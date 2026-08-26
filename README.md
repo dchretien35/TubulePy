@@ -4,6 +4,19 @@ TubulePy allows calculation of microtubule protofilament skew angles and helical
 Contact: denis.chretien@cnrs.fr
 
 # Installation
+Download TubulePy.py and place it in a dedicated folder. Download the three PDB files (Alpha.pdb, Alpha_Beta.pdb and Alpha_Beta_kin.pdb) and place them in a subfolder named PDB_models.
+
+•	It is recommended to create a TubulePy environment.
+
+•	Python 3.9+ versions recommended (runs fine on 3.11/3.13).
+
+•	Needs Tkinter available with the Python build (standard on most macOS/Windows installers; on some Linux distros: run 'install python3-tk').
+
+•	External app: Latest version of UCSF ChimeraX (https://www.cgl.ucsf.edu/chimerax/) installed and its ChimeraX binary accessible (path is user-selectable in the app).
+
+•	Packages for full feature set (projections and gallery): numpy, mrcfile, Pillow.
+•	Optional packages: matplotlib (needed for the N ~  plot and as a fallback saver if Pillow is missing).
+
 
 # History
 TubulePy is based on the Lattice Accommodation Model that allows prediction of microtubule protofilament skew angles for any N_S configuration (Chrétien and Fuller, 2020). Microtubules with fractional helical-starts mimicking unique C- or D-type lattices are calculated (Guyomar et al., in preparation).
