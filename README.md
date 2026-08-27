@@ -1,5 +1,8 @@
+
 # TubulePy
-TubulePy allows calculation of microtubule protofilament skew angles and helical parameters for different protofilament numbers (N) and helical-start numbers (S), taking into account variations in their lattice parameters (the tubulin monomer subunit repeat, their rise along the left-handed helices, and the separation between protofilaments).
+TubulePy allows calculation of microtubule protofilament skew angles and helical parameters for different protofilament numbers (N) and helical-start numbers (S), taking into account variations in their lattice parameters: the tubulin monomer subunit repeat (_a_), their rise along the left-handed helices (_r_), and the separation between protofilaments (_dx_).
+
+<img width="293" height="442" alt="LAM" src="https://github.com/user-attachments/assets/64617499-8e6e-4a62-ab61-ca6dafa0ff47" />
 
 Contact: denis.chretien@cnrs.fr
 
